@@ -132,14 +132,21 @@ public class MainActivity extends Activity {
     private static final int[][] LAYOUTS = {
         {6, 36, 9, 224, 604, 400, 176, 30, 0, 0, 0, 0},
         {8, 28, 9, 170, 560, 300, 112, 26, 0, 0, 0, 0},
-        {5, 40, 9, 220, 640, 560, 220, 32, 1, 2, 0, 1},
+        {5, 40, 9, 220, 690, 610, 220, 32, 1, 2, 0, 1},
         {7, 32, 10, 172, 600, 330, 140, 28, 0, 0, 1, 0},
     };
     private int perRow, gap, tileShape, rowStep, row1Top, gridMinTop, clockSize, dateSize;
     private boolean clockCentred, alwaysNames, noNames, glassOnly, cinema;
     // Cinema: the others step back to this, the focused app grows a little more, the lights go off after
     // this long without a key, and the joke is fetched once a day.
-    private static final float SPOTLIGHT_REST = 0.5f, CINEMA_LIFT = 1.12f, LIGHTS_DIM = 0.14f;
+    private static final float SPOTLIGHT_REST = 0.7f, CINEMA_LIFT = 1.12f, LIGHTS_DIM = 0.14f;
+    // Cinema tiles are a little see-through, tinted in their app's colour, so the light behind shows.
+    private static final float TILE_GLASS = 0.8f;
+    // Weather: Open-Meteo for the place saved with --es weather "lat,lon", fetched at most every half hour.
+    private static final String WEATHER_URL = "https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code&";
+    private static final long WEATHER_EVERY_MS = 30 * 60 * 1000;
+    private TextView weatherView;
+    private boolean weatherLoading;
     private static final int EDGE = 260; // the soft bottom edge's height
     private static final long LIGHTS_OFF_MS = 60000, LIGHTS_FADE_MS = 1200, GLOW_MS = 450;
     private static final String JOKE_URL = "https://v2.jokeapi.dev/joke/Miscellaneous,Dark,Pun,Spooky,Christmas?lang=";
@@ -262,6 +269,13 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
         tp.topMargin = px(-20 * clockSize / 176); // pull the big digits up under the date
         clock.addView(time, tp);
+        if (getSharedPreferences(PREFS, 0).getString("weather", null) != null) {
+            weatherView = text(px(dateSize + 2), 0xD9FFFFFF, regular);
+            weatherView.setText(getSharedPreferences(PREFS, 0).getString("weather_text", ""));
+            LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-2, -2);
+            wp.topMargin = px(4);
+            clock.addView(weatherView, wp);
+        }
         if (cinema) {
             // A small heading over the joke, hidden until there is one.
             jokeHead = text(px(20), 0x80FFFFFF, semibold);
@@ -334,8 +348,14 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        // Home pressed (see HomeButton): back to the top, first app focused.
+        if (intent != null && intent.getBooleanExtra("fromHome", false)) {
+            scroller.scrollTo(0, 0);
+            View first = rowApps.isEmpty() ? null : tile(rowApps.get(0));
+            if (first != null) first.requestFocus();
+        }
         // A clock or layout change needs the whole page rebuilt; a new app list only needs the tiles.
-        boolean clock = intent != null && (intent.hasExtra("clock") || intent.hasExtra("layout"));
+        boolean clock = intent != null && (intent.hasExtra("clock") || intent.hasExtra("layout") || intent.hasExtra("weather"));
         if (saveConfig(intent)) {
             if (clock) recreate();
             else buildTiles();
@@ -353,7 +373,8 @@ public class MainActivity extends Activity {
         String clock = intent == null ? null : intent.getStringExtra("clock");
         String fake = intent == null ? null : intent.getStringExtra("fakeinputs");
         String layout = intent == null ? null : intent.getStringExtra("layout");
-        if (apps == null && quick == null && clock == null && fake == null && layout == null) return false;
+        String weather = intent == null ? null : intent.getStringExtra("weather");
+        if (apps == null && quick == null && clock == null && fake == null && layout == null && weather == null) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, 0);
         String stamp = intent.getStringExtra("stamp");
         if (stamp != null && stamp.equals(prefs.getString("stamp", null))) return false;
@@ -373,6 +394,13 @@ public class MainActivity extends Activity {
             clock = clock.trim();
             if (clock.isEmpty() || clock.equalsIgnoreCase("auto")) e.remove(PREF_CLOCK);
             else e.putString(PREF_CLOCK, clock);
+        }
+        // The place for the weather, as "lat,lon"; "none" takes the weather away.
+        if (weather != null) {
+            weather = weather.replace(" ", "");
+            if (weather.matches("-?\\d+(\\.\\d+)?,-?\\d+(\\.\\d+)?")) e.putString("weather", weather);
+            else e.remove("weather");
+            e.remove("weather_text").remove("weather_at");
         }
         if (layout != null) {
             layout = layout.trim();
@@ -435,6 +463,7 @@ public class MainActivity extends Activity {
             loadJoke();
             lightsOn(false);
         }
+        loadWeather();
         HomeButton.onHomeResumed(this); // back on this home screen: Home comes here again
         // Only counted as opened once it has stayed up a moment, so a crash right after opening still
         // counts as a failed launch.
@@ -451,6 +480,7 @@ public class MainActivity extends Activity {
         HomeButton.onHomeOk(this);
         root.removeCallbacks(lightsOff);
         root.removeCallbacks(greeting);
+        root.removeCallbacks(weatherTick);
     }
 
     // Back from a menu or a window on top (like the uninstall prompt): catch up on apps that changed.
@@ -546,6 +576,62 @@ public class MainActivity extends Activity {
         root.postDelayed(greeting, 15 * 60 * 1000);
     }
 
+    private final Runnable weatherTick = this::loadWeather;
+
+    // "6° · Partly cloudy" under the clock, from Open-Meteo (no account, no key). Kept between fetches,
+    // so it shows at once and stays when the connection is down.
+    private void loadWeather() {
+        final SharedPreferences prefs = getSharedPreferences(PREFS, 0);
+        final String place = prefs.getString("weather", null);
+        if (weatherView == null || place == null) return;
+        root.removeCallbacks(weatherTick);
+        root.postDelayed(weatherTick, WEATHER_EVERY_MS);
+        if (weatherLoading || System.currentTimeMillis() - prefs.getLong("weather_at", 0) < WEATHER_EVERY_MS) return;
+        weatherLoading = true;
+        final String[] ll = place.split(",");
+        new Thread(() -> {
+            String text = null;
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(WEATHER_URL
+                        + "latitude=" + ll[0] + "&longitude=" + ll[1]).openConnection();
+                c.setConnectTimeout(5000);
+                c.setReadTimeout(5000);
+                try (java.io.InputStream in = c.getInputStream()) {
+                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[4096];
+                    for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+                    org.json.JSONObject now = new org.json.JSONObject(out.toString("UTF-8")).getJSONObject("current");
+                    text = Math.round(now.getDouble("temperature_2m")) + "° · " + Strings.t(weatherName(now.getInt("weather_code")));
+                } finally {
+                    c.disconnect();
+                }
+            } catch (Exception ignored) {}
+            final String got = text;
+            runOnUiThread(() -> {
+                weatherLoading = false;
+                if (got == null) return;
+                prefs.edit().putString("weather_text", got).putLong("weather_at", System.currentTimeMillis()).apply();
+                if (weatherView != null) weatherView.setText(got);
+            });
+        }).start();
+    }
+
+    // WMO weather codes, as Open-Meteo gives them, in a few plain words.
+    private static String weatherName(int code) {
+        if (code == 0) return "Clear";
+        if (code == 1) return "Mostly clear";
+        if (code == 2) return "Partly cloudy";
+        if (code == 3) return "Overcast";
+        if (code == 45 || code == 48) return "Fog";
+        if (code >= 51 && code <= 57) return "Drizzle";
+        if (code >= 61 && code <= 67) return "Rain";
+        if (code >= 71 && code <= 77) return "Snow";
+        if (code >= 80 && code <= 82) return "Showers";
+        if (code == 85 || code == 86) return "Snow showers";
+        if (code >= 95) return "Thunderstorm";
+        return "Cloudy";
+    }
+
     // The joke of the day: one a day from JokeAPI (puns, dark, spooky, Christmas and the rest), kept for the
     // day; a two-part joke shows its punchline on the next line. Without a connection yesterday's stays.
     private void loadJoke() {
@@ -637,6 +723,12 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             return layers;
         }
+    }
+
+    // The saved wallpaper's colours, for HomeButton's curtain.
+    static int[] wallpaperColors(Context c) {
+        String saved = c.getSharedPreferences(PREFS, 0).getString("wallpaper", null);
+        return WALLPAPERS[Math.max(0, Arrays.asList(WALLPAPER_NAMES).indexOf(saved))];
     }
 
     // The saved wallpaper, as an index into WALLPAPERS (Dusk if none is saved).
@@ -811,11 +903,17 @@ public class MainActivity extends Activity {
         FrameLayout card = new FrameLayout(this);
         final GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(px(RADIUS));
+        if (cinema) tints.put(key, tint(banner != null ? banner : appIcon));
+        // Cinema: the banner sits a little see-through on a glass of its own colour.
+        final int glassTint = cinema && banner != null ? (tints.get(key) & 0x00FFFFFF) | 0x55000000 : 0xFF1E1A1C;
+        ImageView bannerView = null;
         if (banner != null) {
-            bg.setColor(0xFF1E1A1C);
+            bg.setColor(glassTint);
             ImageView iv = new ImageView(this);
             iv.setImageDrawable(fit(banner, w, h));
+            if (cinema) iv.setAlpha(TILE_GLASS);
             card.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+            bannerView = iv;
         } else {
             // Quiet "glass" tile: icon above label.
             bg.setColor(0x13FFFFFF);
@@ -848,7 +946,7 @@ public class MainActivity extends Activity {
 
         // Banner tiles show their name underneath when focused.
         final TextView caption = banner == null || noNames ? null : text(px(24), Color.WHITE, regular);
-        if (cinema) tints.put(key, tint(banner != null ? banner : appIcon));
+        final ImageView seeThrough = cinema ? bannerView : null;
         if (caption != null) {
             caption.setText(label);
             caption.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -859,8 +957,9 @@ public class MainActivity extends Activity {
         final boolean glass = banner == null;
         card.setOnFocusChangeListener((v, has) -> {
             if (has) focusedKey = key;
-            lift(v, bg, has, glass ? 0x13FFFFFF : 0xFF1E1A1C, glass ? 0x38FFFFFF : 0xFF1E1A1C,
+            lift(v, bg, has, glass ? 0x13FFFFFF : glassTint, glass ? 0x38FFFFFF : glassTint,
                     px(RADIUS), px(RADIUS + RADIUS_UP));
+            if (seeThrough != null) seeThrough.animate().alpha(has ? 1f : TILE_GLASS).setDuration(FOCUS_MS).start();
             if (cinema && has) {
                 spotlight(key);
                 v.post(() -> clearEdge(v));
@@ -1145,6 +1244,7 @@ public class MainActivity extends Activity {
             // Google TV stays on behind this screen: a way there, and a switch for the Home button service.
             if (HomeButton.hasGoogleTv(this)) {
                 list.add("Open Google TV");
+                list.add("Restart…");
                 list.add(HomeButton.catchHome(this) ? "Catch Home: on" : "Catch Home: off");
             }
             final String[] items = list.toArray(new String[0]);
@@ -1153,6 +1253,7 @@ public class MainActivity extends Activity {
                 else if ("Layout".equals(items[which])) showLayouts();
                 else if ("Brightness".equals(items[which])) openBrightness();
                 else if ("Open Google TV".equals(items[which])) HomeButton.openGoogleTv(this);
+                else if ("Restart…".equals(items[which])) { if (!HomeButton.powerMenu()) openTvSettings(); }
                 else if (items[which].startsWith("Catch Home")) HomeButton.setCatchHome(this, !HomeButton.catchHome(this));
                 else openTvSettings();
             });

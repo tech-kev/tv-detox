@@ -5,12 +5,16 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.PixelFormat;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.view.KeyEvent;
+import android.view.View;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 
 // Opt-in (Settings > Accessibility > Home button): makes Home open this home screen on TVs where the
@@ -22,6 +26,9 @@ import android.view.accessibility.AccessibilityEvent;
 // at once. A Chromecast remote sends Home two or three times per press, and each one brings Google TV
 // back, so a Google TV that shows again right after gets covered once more when the remote is done.
 // Any other window opening in between means Home wasn't where the TV was going, and nothing happens.
+// While this home screen comes up, a curtain in its wallpaper's colours covers Google TV (an accessibility
+// overlay, which needs no other permission), so Google TV shows for a frame at most; it lifts once this
+// home screen is on screen, when any other app opens, or after two seconds whatever happens.
 // Settings > Open Google TV stays there until the next Home; Settings > Catch Home turns it all off.
 public class HomeButton extends AccessibilityService {
     private static final ComponentName GOOGLE_TV_HOME = new ComponentName(
@@ -33,9 +40,33 @@ public class HomeButton extends AccessibilityService {
     private static final long DEBOUNCE_MS = 300;
     private static long lastOpened = -DEBOUNCE_MS;
 
+    private static final long CURTAIN_MAX_MS = 2000, CURTAIN_SETTLE_MS = 120, CURTAIN_FADE_MS = 150;
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable cover = this::cover;
+    private final Runnable lift = this::liftCurtain;
     private boolean googleTvOnTop;
+    private View curtain;
+    // The bound service, so Settings > Restart can open the power menu through it.
+    private static HomeButton running;
+
+    @Override
+    protected void onServiceConnected() {
+        running = this;
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        running = null;
+        liftCurtain();
+        return super.onUnbind(intent);
+    }
+
+    // Settings > Restart: an app can't restart the TV itself, but this service can open Android's power
+    // menu, which can. False if the service isn't on.
+    static boolean powerMenu() {
+        return running != null && running.performGlobalAction(GLOBAL_ACTION_POWER_DIALOG);
+    }
 
     // On a Chromecast the system keeps Home and this never sees it; where a TV does pass it on, a press
     // while Google TV is already up (no new window) still comes back.
@@ -56,6 +87,14 @@ public class HomeButton extends AccessibilityService {
         String pkg = String.valueOf(event.getPackageName()), cls = String.valueOf(event.getClassName());
         // Toasts and the volume bar come from System UI and don't change what's on screen.
         if ("com.android.systemui".equals(pkg)) return;
+        if (getPackageName().equals(pkg)) {
+            // This home screen is up: give it a moment to draw, then lift the curtain.
+            googleTvOnTop = false;
+            handler.removeCallbacks(cover);
+            handler.removeCallbacks(lift);
+            handler.postDelayed(lift, CURTAIN_SETTLE_MS);
+            return;
+        }
         if (GOOGLE_TV_HOME.getPackageName().equals(pkg)) {
             // Google TV's other windows (its FrameLayout overlays, profile pages) say nothing about Home.
             if (!GOOGLE_TV_HOME.getClassName().equals(cls) && !cls.startsWith(GOOGLE_TV_DASHBOARD)) return;
@@ -66,6 +105,7 @@ public class HomeButton extends AccessibilityService {
         } else {
             googleTvOnTop = false;
             handler.removeCallbacks(cover);
+            liftCurtain();
         }
     }
 
@@ -77,7 +117,11 @@ public class HomeButton extends AccessibilityService {
     private void cover() {
         if (!googleTvOnTop || !setupDone() || !catchHome(this)) return;
         SharedPreferences prefs = prefs(this);
-        if (stayingOnGoogleTv(prefs)) return;
+        if (stayingOnGoogleTv(prefs)) {
+            liftCurtain();
+            return;
+        }
+        showCurtain();
         long now = SystemClock.elapsedRealtime();
         if (now - lastOpened < DEBOUNCE_MS) {
             handler.postDelayed(cover, DEBOUNCE_MS - (now - lastOpened));
@@ -94,14 +138,51 @@ public class HomeButton extends AccessibilityService {
         if (pending >= 0) failures++;
         if (failures >= 3) {
             prefs.edit().remove("pending").putInt("failures", failures).commit();
+            liftCurtain();
             return;
         }
         // Save before launching: a crash can take the service down with the activity.
         if (!prefs.edit().putLong("pending", now).putInt("failures", failures).commit()) return;
         lastOpened = now;
         try {
-            startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            // Marked as Home, so the page goes back to its top.
+            startActivity(new Intent(this, MainActivity.class).putExtra("fromHome", true)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception ignored) {
+            liftCurtain();
+        }
+    }
+
+    private void showCurtain() {
+        handler.removeCallbacks(lift);
+        handler.postDelayed(lift, CURTAIN_MAX_MS);
+        if (curtain != null) {
+            curtain.animate().cancel();
+            curtain.setAlpha(1f);
+            return;
+        }
+        try {
+            int[] c = MainActivity.wallpaperColors(this);
+            View v = new View(this);
+            v.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {c[0], c[1], c[2]}));
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(-1, -1,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.OPAQUE);
+            ((WindowManager) getSystemService(WINDOW_SERVICE)).addView(v, lp);
+            curtain = v;
         } catch (Exception ignored) {}
+    }
+
+    private void liftCurtain() {
+        handler.removeCallbacks(lift);
+        final View v = curtain;
+        if (v == null) return;
+        curtain = null;
+        v.animate().alpha(0f).setDuration(CURTAIN_FADE_MS).withEndAction(() -> {
+            try { ((WindowManager) getSystemService(WINDOW_SERVICE)).removeView(v); } catch (Exception ignored) {}
+        }).start();
     }
 
     @Override

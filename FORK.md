@@ -14,15 +14,30 @@ gleich mit dem Original.
   drüber und noch einmal, wenn weitere Home-Befehle nachkommen. Google TV ist ca. 0,3 s zu sehen.
 - Gilt auch für langes Drücken (Google-TV-Dashboard).
 - Interne Fenster von Google TV (`android.widget.FrameLayout`) brechen das Drüberlegen nicht mehr ab.
+- **Vorhang** (Idee aus [DumbTV](https://github.com/humblemuzzu/dumbtv), siehe [Plume #153](https://github.com/aradhyas8/Plume_Launcher/issues/153)):
+  sobald Google TV gemeldet wird, legt der Dienst ein Overlay in den Hintergrundfarben darüber, bis tv-detox
+  gezeichnet ist (max. 2 s). Gemessen: Google TV noch ~0,25 s sichtbar, dann ~0,35 s Vorhang, dann tv-detox.
+  Früher geht nicht ohne `canRetrieveWindowContent`, das die App bewusst nicht hat.
+- Home springt immer nach oben zur ersten App.
 
 **Einstellungen-Kachel (`MainActivity.java`, `Strings.java`)**
 - **Layout**: Klassisch, Kompakt, Kino, Minimal (siehe unten). Auch per `--es layout <Name>` beim Start.
 - **Google TV öffnen**: bleibt bis zum nächsten Home bei Google TV.
 - **Home-Taste abfangen: an/aus**: aus = Home verhält sich wieder wie bei Google TV.
+- **Neu starten…**: öffnet über den Home-Dienst das Android-Ausschaltmenü (eine App darf nicht selbst neu starten).
+
+**Wetter unter der Uhr** (alle Layouts), von [Open-Meteo](https://open-meteo.com), alle 30 min. Der Ort wird nur
+auf dem TV gespeichert, nicht im Code:
+
+```sh
+adb shell am start -n com.ansub.tvhome/.MainActivity --es weather "<breite>,<länge>" --es stamp $(date +%s)
+# entfernen: --es weather none
+```
 
 **Kino-Layout**
 - Hintergrund leuchtet in der Farbe der markierten App (aus Banner/Icon berechnet, einmal pro App), weich überblendet.
 - Markierte App größer, mit Schatten in ihrer Farbe; die anderen gedimmt. Keine Namen unter den Kacheln.
+- Kacheln leicht durchscheinend auf einem Glas in ihrer eigenen Farbe.
 - Unterer Rand läuft wie eine Leinwand ins Dunkle aus; markierte untere Reihen scrollen darüber hinaus.
 - „Licht aus“: nach 60 s ohne Taste bleiben Begrüßung, Uhr und Witz; die Apps nur noch schwach sichtbar.
   Der erste Tastendruck weckt nur.
