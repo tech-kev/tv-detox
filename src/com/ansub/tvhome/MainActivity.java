@@ -139,11 +139,12 @@ public class MainActivity extends Activity {
     private boolean clockCentred, alwaysNames, noNames, glassOnly, cinema;
     // Cinema: the others step back to this, the focused app grows a little more, the lights go off after
     // this long without a key, and the joke is fetched once a day.
-    private static final float SPOTLIGHT_REST = 0.5f, CINEMA_LIFT = 1.12f;
+    private static final float SPOTLIGHT_REST = 0.5f, CINEMA_LIFT = 1.12f, LIGHTS_DIM = 0.14f;
+    private static final int EDGE = 260; // the soft bottom edge's height
     private static final long LIGHTS_OFF_MS = 20000, LIGHTS_FADE_MS = 1200, GLOW_MS = 450;
-    private static final String JOKE_URL = "https://v2.jokeapi.dev/joke/Any?safe-mode&type=single&lang=";
+    private static final String JOKE_URL = "https://v2.jokeapi.dev/joke/Miscellaneous,Dark,Pun,Spooky,Christmas?lang=";
     private TextClock dateView;
-    private TextView jokeView;
+    private TextView jokeView, jokeHead;
     private View clockView, glowView, edgeView;
     private ScrollView scroller;
     private final Map<String, Integer> tints = new java.util.HashMap<>(); // each app's colour, worked out once
@@ -262,6 +263,13 @@ public class MainActivity extends Activity {
         tp.topMargin = px(-20 * clockSize / 176); // pull the big digits up under the date
         clock.addView(time, tp);
         if (cinema) {
+            // A small heading over the joke, hidden until there is one.
+            jokeHead = text(px(20), 0x80FFFFFF, semibold);
+            jokeHead.setText(Strings.t("Joke of the day").toUpperCase(java.util.Locale.getDefault()));
+            jokeHead.setLetterSpacing(0.14f);
+            LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-2, -2);
+            hp.topMargin = px(14);
+            clock.addView(jokeHead, hp);
             jokeView = text(px(28), 0xB3FFFFFF, regular);
             jokeView.setGravity(Gravity.CENTER_HORIZONTAL);
             jokeView.setMaxLines(3);
@@ -269,8 +277,9 @@ public class MainActivity extends Activity {
             jokeView.setLineSpacing(px(6), 1f);
             jokeView.setText(getSharedPreferences(PREFS, 0).getString("joke", ""));
             LinearLayout.LayoutParams jp = new LinearLayout.LayoutParams(px(1300), -2);
-            jp.topMargin = px(12);
+            jp.topMargin = px(6);
             clock.addView(jokeView, jp);
+            jokeHead.setVisibility(jokeView.getText().length() > 0 ? View.VISIBLE : View.GONE);
         }
         clockView = clock;
         if (clockCentred) {
@@ -293,7 +302,7 @@ public class MainActivity extends Activity {
             stage.addView(glowView, new FrameLayout.LayoutParams(-1, -1));
             stage.addView(scroller, new FrameLayout.LayoutParams(-1, -1));
             edgeView = new View(this);
-            stage.addView(edgeView, new FrameLayout.LayoutParams(-1, px(300), Gravity.BOTTOM));
+            stage.addView(edgeView, new FrameLayout.LayoutParams(-1, px(EDGE), Gravity.BOTTOM));
             paintEdge(WALLPAPERS[wallpaper()]);
             setContentView(stage);
         } else setContentView(scroller);
@@ -501,9 +510,9 @@ public class MainActivity extends Activity {
         scroller.smoothScrollTo(0, 0);
         for (int i = 0; i < root.getChildCount(); i++) {
             View c = root.getChildAt(i);
-            if (c != clockView) c.animate().alpha(0f).setDuration(LIGHTS_FADE_MS).start();
+            if (c != clockView) c.animate().alpha(LIGHTS_DIM).setDuration(LIGHTS_FADE_MS).start();
         }
-        glowView.animate().alpha(0f).setDuration(LIGHTS_FADE_MS).start();
+        glowView.animate().alpha(0.3f).setDuration(LIGHTS_FADE_MS).start();
     };
 
     private void lightsOn(boolean fade) {
@@ -518,7 +527,7 @@ public class MainActivity extends Activity {
         if (fade) glowView.animate().alpha(1f).setDuration(FOCUS_MS * 2).start();
         else glowView.setAlpha(1f);
         View f = getCurrentFocus();
-        if (f != null) f.requestRectangleOnScreen(new android.graphics.Rect(0, 0, f.getWidth(), f.getHeight()));
+        if (f != null) clearEdge(f);
         root.removeCallbacks(lightsOff);
         root.postDelayed(lightsOff, LIGHTS_OFF_MS);
     }
@@ -537,13 +546,14 @@ public class MainActivity extends Activity {
         root.postDelayed(greeting, 15 * 60 * 1000);
     }
 
-    // The joke of the day: one a day from JokeAPI (safe mode only), kept for the day. Without a
-    // connection yesterday's stays.
+    // The joke of the day: one a day from JokeAPI (puns, dark, spooky, Christmas and the rest), kept for the
+    // day; a two-part joke shows its punchline on the next line. Without a connection yesterday's stays.
     private void loadJoke() {
         final SharedPreferences prefs = getSharedPreferences(PREFS, 0);
         java.util.Calendar now = java.util.Calendar.getInstance();
         final String today = now.get(java.util.Calendar.YEAR) + "-" + now.get(java.util.Calendar.DAY_OF_YEAR);
-        if (today.equals(prefs.getString("joke_day", null)) || jokeLoading) return;
+        if ((today.equals(prefs.getString("joke_day", null)) && JOKE_URL.equals(prefs.getString("joke_url", null)))
+                || jokeLoading) return;
         jokeLoading = true;
         final String lang = Arrays.asList("de", "cs", "es", "fr", "pt").contains(Strings.lang()) ? Strings.lang() : "en";
         new Thread(() -> {
@@ -557,7 +567,8 @@ public class MainActivity extends Activity {
                     byte[] buf = new byte[4096];
                     for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
                     org.json.JSONObject o = new org.json.JSONObject(out.toString("UTF-8"));
-                    if (!o.optBoolean("error", true)) joke = o.optString("joke", null);
+                    if (!o.optBoolean("error", true)) joke = "twopart".equals(o.optString("type"))
+                            ? o.optString("setup") + "\n" + o.optString("delivery") : o.optString("joke", null);
                 } finally {
                     c.disconnect();
                 }
@@ -566,8 +577,11 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 jokeLoading = false;
                 if (got == null || got.trim().isEmpty()) return;
-                prefs.edit().putString("joke", got.trim()).putString("joke_day", today).apply();
-                if (jokeView != null) jokeView.setText(got.trim());
+                prefs.edit().putString("joke", got.trim()).putString("joke_day", today).putString("joke_url", JOKE_URL).apply();
+                if (jokeView != null) {
+                    jokeView.setText(got.trim());
+                    jokeHead.setVisibility(View.VISIBLE);
+                }
             });
         }).start();
     }
@@ -639,7 +653,7 @@ public class MainActivity extends Activity {
     private void paintEdge(int[] c) {
         int base = c[2] & 0x00FFFFFF;
         edgeView.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] {base, 0xB0000000 | base, 0xF2000000 | base}));
+                new int[] {base, 0x99000000 | base, 0xE6000000 | base}));
     }
 
     // The wallpapers, each with a small dot of its colours. Moving through the list shows each one
@@ -847,7 +861,10 @@ public class MainActivity extends Activity {
             if (has) focusedKey = key;
             lift(v, bg, has, glass ? 0x13FFFFFF : 0xFF1E1A1C, glass ? 0x38FFFFFF : 0xFF1E1A1C,
                     px(RADIUS), px(RADIUS + RADIUS_UP));
-            if (cinema && has) spotlight(key);
+            if (cinema && has) {
+                spotlight(key);
+                v.post(() -> clearEdge(v));
+            }
             if (caption != null && alwaysNames) {
                 caption.animate().cancel();
                 caption.animate().alpha(has ? 1f : NAME_REST).setDuration(FOCUS_MS).setInterpolator(FOCUS_EASE).start();
@@ -976,6 +993,20 @@ public class MainActivity extends Activity {
             }
         }
         glow(tint != null ? (color & 0x00FFFFFF) | 0x66000000 : 0x26FFFFFF);
+    }
+
+    // The page only scrolls far enough to show a focused tile at all, which leaves a lower row under the
+    // soft edge. Scroll on until it's clear; the first row goes back to the top, clock and all.
+    private void clearEdge(View v) {
+        if (rowApps.indexOf(v.getTag()) >= 0 && rowApps.indexOf(v.getTag()) < perRow) {
+            scroller.smoothScrollTo(0, 0);
+            return;
+        }
+        int[] at = new int[2];
+        v.getLocationOnScreen(at);
+        int bottom = at[1] + v.getHeight() + px(24);
+        int limit = getResources().getDisplayMetrics().heightPixels - px(EDGE) + px(40);
+        if (bottom > limit) scroller.smoothScrollBy(0, bottom - limit);
     }
 
     // Fades the light behind the page to a new colour.
