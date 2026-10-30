@@ -538,6 +538,10 @@ public class MainActivity extends Activity {
         if (!hasWindowFocus() || movingKey != null) return;
         dark = true;
         scroller.smoothScrollTo(0, 0);
+        // A lifted tile (scaled, with a shadow) inside a faded row loses its rounded corners on some GPUs
+        // (seen on a Chromecast), so it settles back in with the rest while the lights are off.
+        View f = getCurrentFocus();
+        if (f != null) f.animate().scaleX(1f).scaleY(1f).translationZ(0).setDuration(LIGHTS_FADE_MS).start();
         for (int i = 0; i < root.getChildCount(); i++) {
             View c = root.getChildAt(i);
             if (c != clockView) c.animate().alpha(LIGHTS_DIM).setDuration(LIGHTS_FADE_MS).start();
@@ -557,7 +561,10 @@ public class MainActivity extends Activity {
         if (fade) glowView.animate().alpha(1f).setDuration(FOCUS_MS * 2).start();
         else glowView.setAlpha(1f);
         View f = getCurrentFocus();
-        if (f != null) clearEdge(f);
+        if (f != null) {
+            f.animate().scaleX(CINEMA_LIFT).scaleY(CINEMA_LIFT).translationZ(px(26)).setDuration(FOCUS_MS).start();
+            clearEdge(f);
+        }
         root.removeCallbacks(lightsOff);
         root.postDelayed(lightsOff, LIGHTS_OFF_MS);
     }
