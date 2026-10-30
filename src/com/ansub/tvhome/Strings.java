@@ -13,6 +13,8 @@ final class Strings {
         "Move", "Replace", "Remove from home", "Uninstall", "App info",
         "Use the arrows to move it, then press OK", "Every app is already here", "Add an app", "Replace %s", "Wallpaper", "TV settings", "Brightness",
         "Rename", "Show hidden inputs", "TV", "Laptop", "PC", "Blu-ray", "Soundbar", "Type a name…",
+        "Open Google TV", "Catch Home: on", "Catch Home: off",
+        "Layout", "Classic", "Compact", "Cinema", "Minimal", "%s free",
     };
 
     // Keyed by language ("de"), or language-country ("zh-TW") where a country writes it differently.
@@ -29,6 +31,8 @@ final class Strings {
             "Verschieben", "Ersetzen", "Vom Startbildschirm entfernen", "Deinstallieren", "App-Info",
             "Mit den Pfeiltasten verschieben, dann OK drücken", "Alle Apps sind schon da", "App hinzufügen", "%s ersetzen", "Hintergrund", "TV-Einstellungen", "Helligkeit",
             "Umbenennen", "Ausgeblendete Eingänge anzeigen", "TV", "Laptop", "PC", "Blu-ray", "Soundbar", "Namen eingeben…",
+            "Google TV öffnen", "Home-Taste abfangen: an", "Home-Taste abfangen: aus",
+            "Layout", "Klassisch", "Kompakt", "Kino", "Minimal", "%s frei",
         });
         LANGS.put("es", new String[] {
             "Ajustes", "Añadir app", "Red", "Sin conexión", "Sonido", "Imagen",

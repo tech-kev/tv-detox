@@ -93,7 +93,8 @@ public class MainActivity extends Activity {
     private static final String ADD = "add";
     private static final String[] EDIT_ITEMS = {"Move", "Replace", "Remove from home", "Uninstall"};
     private static final String[] EDIT_ITEMS_SYSTEM = {"Move", "Replace", "Remove from home", "App info"};
-    private static final int PER_ROW = 6, MAX_INPUTS = 4;
+    private static final int MAX_INPUTS = 4;
+    private static final String STORAGE = "storage";
 
     // Settings shortcuts: name, label, icon. Tile keys are QUICK + name.
     private static final String QUICK = "quick:";
@@ -116,17 +117,30 @@ public class MainActivity extends Activity {
     private static final String TCL_SHOW_WINDOW = "com.tcl.settings.SHOW_WINDOW";
 
     // Layout is designed at 1920x1080 and scaled to the TV's real UI size by px().
-    private static final int MARGIN = 96, GAP = 36, RADIUS = 26;
+    private static final int MARGIN = 96, RADIUS = 26;
     // The focus lift: the tile grows, rises, brightens and rounds off a little, then settles.
     // Long enough to read as motion, short enough that a run of d-pad presses never feels behind.
     private static final int FOCUS_MS = 180, RADIUS_UP = 10;
     private static final Interpolator FOCUS_EASE = new DecelerateInterpolator(1.8f);
-    private static final int ROW1_TOP = 604, ROW_STEP = 224;
-    private static final int GRID_MIN_TOP = 400; // more rows push the grid up, but not into the clock
+    // Layouts, picked under Settings > Layout. Each one: apps per row, the gap between them, tile height in
+    // sixteenths of its width, the step from one row to the next, where a single row of apps sits and how high
+    // more rows may push the grid (not into the clock), the clock's and date's size, then three switches:
+    // clock centred, app names always shown, and plain glass tiles with the app's icon instead of its banner.
+    private static final String[] LAYOUT_NAMES = {"Classic", "Compact", "Cinema", "Minimal"};
+    private static final int[][] LAYOUTS = {
+        {6, 36, 9, 224, 604, 400, 176, 30, 0, 0, 0},
+        {8, 28, 9, 170, 560, 300, 112, 26, 0, 0, 0},
+        {5, 40, 9, 250, 560, 440, 220, 32, 1, 1, 0},
+        {7, 32, 10, 172, 600, 330, 140, 28, 0, 0, 1},
+    };
+    private int perRow, gap, tileShape, rowStep, row1Top, gridMinTop, clockSize, dateSize;
+    private boolean clockCentred, alwaysNames, glassOnly;
+    // Storage below this share free gets a note by the icons; below the second it turns amber.
+    private static final float STORAGE_LOW = 0.15f, STORAGE_VERY_LOW = 0.10f;
     private static final int ICON_TOP = 76, ICON_BUTTON = 72, ICON_SIZE = 40, ICON_GAP = 12; // level with the date
 
     // The Settings tile opens a small menu: the home screen's own settings, then the TV's.
-    private static final String[] SETTINGS_ITEMS = {"Wallpaper", "Brightness", "TV settings"};
+    private static final String[] SETTINGS_ITEMS = {"Wallpaper", "Layout", "Brightness", "TV settings"};
     // Android TV 11 and later (Google TV too) has no Display page, but its "Display & Sound" page holds Picture.
     private static final String[] TV_DISPLAY_SOUND = {"com.android.tv.settings",
             "com.android.tv.settings.device.displaysound.DisplaySoundActivity"};
@@ -201,6 +215,7 @@ public class MainActivity extends Activity {
         loadFonts();
         scale = getResources().getDisplayMetrics().widthPixels / 1920f;
         showWallpaper(wallpaper());
+        applyLayout(LAYOUTS[layout()]);
 
         ScrollView scroller = new ScrollView(this);
         scroller.setFillViewport(true);
@@ -213,13 +228,14 @@ public class MainActivity extends Activity {
 
         LinearLayout clock = new LinearLayout(this);
         clock.setOrientation(LinearLayout.VERTICAL);
+        if (clockCentred) clock.setGravity(Gravity.CENTER_HORIZONTAL);
         shownLocale = java.util.Locale.getDefault();
         String day = Strings.datePattern();
-        TextClock date = clock(day, day, px(30), 0xA8FFFFFF, regular);
+        TextClock date = clock(day, day, px(dateSize), 0xA8FFFFFF, regular);
         // The clock follows the TV unless --es clock 12 or 24 says otherwise.
         String clockPref = prefs().getString(PREF_CLOCK, null);
         TextClock time = clock("24".equals(clockPref) ? "H:mm" : "h:mm", "12".equals(clockPref) ? "h:mm" : "H:mm",
-                px(176), Color.WHITE, semibold);
+                px(clockSize), Color.WHITE, semibold);
         time.setLetterSpacing(-0.028f);
         time.setFontFeatureSettings("tnum");
         time.setIncludeFontPadding(false);
@@ -227,14 +243,18 @@ public class MainActivity extends Activity {
         // or "0:00" to "9:59" (one digit less) cuts a long date off.
         clock.addView(date, new LinearLayout.LayoutParams(-2, -2));
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
-        tp.topMargin = px(-20); // pull the big digits up under the date
+        tp.topMargin = px(-20 * clockSize / 176); // pull the big digits up under the date
         clock.addView(time, tp);
-        root.addView(clock, at(px(MARGIN), px(92), -2, -2));
+        if (clockCentred) {
+            FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL);
+            cl.topMargin = px(92);
+            root.addView(clock, cl);
+        } else root.addView(clock, at(px(MARGIN), px(92), -2, -2));
 
         moveHint = text(px(24), 0xA8FFFFFF, regular);
         moveHint.setText(Strings.t("Use the arrows to move it, then press OK"));
         moveHint.setVisibility(View.GONE);
-        root.addView(moveHint, at(px(MARGIN), px(ROW1_TOP - 64), -2, -2));
+        root.addView(moveHint, at(px(MARGIN), px(row1Top - 64), -2, -2));
 
         setContentView(scroller);
 
@@ -265,16 +285,17 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        // A clock change needs the whole page rebuilt; a new app list only needs the tiles.
-        boolean clock = intent != null && intent.hasExtra("clock");
+        // A clock or layout change needs the whole page rebuilt; a new app list only needs the tiles.
+        boolean clock = intent != null && (intent.hasExtra("clock") || intent.hasExtra("layout"));
         if (saveConfig(intent)) {
             if (clock) recreate();
             else buildTiles();
         }
     }
 
-    // Saves an app list passed with --es apps "...", shortcuts passed with --es quick "...", and a
-    // clock override passed with --es clock 12|24|auto. Returns true if it changed.
+    // Saves an app list passed with --es apps "...", shortcuts passed with --es quick "...", a
+    // clock override passed with --es clock 12|24|auto, and a layout passed with --es layout <name>.
+    // Returns true if it changed.
     // When Android kills the home screen in the background, it can start it again with the same old
     // intent; the stamp install.sh sends stops that from undoing changes made on the TV since.
     private boolean saveConfig(Intent intent) {
@@ -282,7 +303,8 @@ public class MainActivity extends Activity {
         String quick = intent == null ? null : intent.getStringExtra("quick");
         String clock = intent == null ? null : intent.getStringExtra("clock");
         String fake = intent == null ? null : intent.getStringExtra("fakeinputs");
-        if (apps == null && quick == null && clock == null && fake == null) return false;
+        String layout = intent == null ? null : intent.getStringExtra("layout");
+        if (apps == null && quick == null && clock == null && fake == null && layout == null) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, 0);
         String stamp = intent.getStringExtra("stamp");
         if (stamp != null && stamp.equals(prefs.getString("stamp", null))) return false;
@@ -302,6 +324,11 @@ public class MainActivity extends Activity {
             clock = clock.trim();
             if (clock.isEmpty() || clock.equalsIgnoreCase("auto")) e.remove(PREF_CLOCK);
             else e.putString(PREF_CLOCK, clock);
+        }
+        if (layout != null) {
+            layout = layout.trim();
+            if (Arrays.asList(LAYOUT_NAMES).contains(layout)) e.putString("layout", layout);
+            else e.remove("layout");
         }
         // Set only by install.sh's FAKE_INPUT=1, which also installs the throwaway input itself.
         // It is for an emulator, which has no HDMI ports, and never for a real TV.
@@ -331,7 +358,7 @@ public class MainActivity extends Activity {
             // Top up with other TV apps people installed (or updated), skipping launchers and system tools.
             Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
             for (ResolveInfo ri : pm.queryIntentActivities(q, 0)) {
-                if (out.size() >= PER_ROW) break;
+                if (out.size() >= perRow) break;
                 String p = ri.activityInfo.packageName;
                 int flags = ri.activityInfo.applicationInfo.flags;
                 boolean stockSystem = (flags & ApplicationInfo.FLAG_SYSTEM) != 0
@@ -477,6 +504,30 @@ public class MainActivity extends Activity {
         });
     }
 
+    // The saved layout, as an index into LAYOUTS (Classic if none is saved).
+    private int layout() {
+        String saved = getSharedPreferences(PREFS, 0).getString("layout", null);
+        return Math.max(0, Arrays.asList(LAYOUT_NAMES).indexOf(saved));
+    }
+
+    private void applyLayout(int[] l) {
+        perRow = l[0]; gap = l[1]; tileShape = l[2]; rowStep = l[3]; row1Top = l[4]; gridMinTop = l[5];
+        clockSize = l[6]; dateSize = l[7];
+        clockCentred = l[8] == 1; alwaysNames = l[9] == 1; glassOnly = l[10] == 1;
+    }
+
+    // The layouts by name; the clock and grid are placed once, so picking one starts the page over.
+    private void showLayouts() {
+        List<String> names = new ArrayList<>();
+        for (String n : LAYOUT_NAMES) names.add(Strings.t(n));
+        final int now = layout();
+        panel(Strings.t("Layout"), names, which -> {
+            if (which == now) return;
+            getSharedPreferences(PREFS, 0).edit().putString("layout", LAYOUT_NAMES[which]).commit();
+            recreate();
+        });
+    }
+
     // A glow colour made solid over the base, three times as strong, so a small dot shows it.
     private static int glow(int glow, int base) {
         float a = Math.min(1f, 3 * (glow >>> 24) / 255f);
@@ -511,9 +562,9 @@ public class MainActivity extends Activity {
         moveHint.setVisibility(View.GONE);
 
         PackageManager pm = getPackageManager();
-        int m = px(MARGIN), g = px(GAP);
-        int w = (getResources().getDisplayMetrics().widthPixels - 2 * m - g * (PER_ROW - 1)) / PER_ROW;
-        int h = w * 9 / 16;
+        int m = px(MARGIN), g = px(gap);
+        int w = (getResources().getDisplayMetrics().widthPixels - 2 * m - g * (perRow - 1)) / perRow;
+        int h = w * tileShape / 16;
         tileW = w;
         tileH = h;
 
@@ -522,9 +573,9 @@ public class MainActivity extends Activity {
         // the bottom row still fit on screen; past that the page scrolls.
         int launchable = 0;
         for (String pkg : apps) if (launchIntent(pm, pkg) != null) launchable++;
-        int rows = Math.max(1, (launchable + PER_ROW - 1) / PER_ROW);
-        gridTop = Math.max(px(GRID_MIN_TOP), px(ROW1_TOP) - (rows - 1) * px(ROW_STEP));
-        int bottomTop = gridTop + rows * px(ROW_STEP);
+        int rows = Math.max(1, (launchable + perRow - 1) / perRow);
+        gridTop = Math.max(px(gridMinTop), px(row1Top) - (rows - 1) * px(rowStep));
+        int bottomTop = gridTop + rows * px(rowStep);
         ((FrameLayout.LayoutParams) moveHint.getLayoutParams()).topMargin = gridTop - px(64);
         root.setMinimumHeight(bottomTop + h + px(MARGIN));
 
@@ -532,7 +583,7 @@ public class MainActivity extends Activity {
             Intent li = launchIntent(pm, pkg);
             if (li == null) continue;
             Drawable banner = null;
-            try {
+            if (!glassOnly) try {
                 banner = pm.getActivityBanner(li);
                 if (banner == null) banner = pm.getApplicationBanner(pkg);
             } catch (Exception ignored) {}
@@ -550,7 +601,7 @@ public class MainActivity extends Activity {
         int col = 0;
         boolean store = !apps.contains(PLAY_STORE) && launchIntent(pm, PLAY_STORE) != null;
         List<TvInputInfo> inputs = hdmiInputs();
-        int room = PER_ROW - 2 - (store ? 1 : 0);
+        int room = perRow - 2 - (store ? 1 : 0);
         if (inputs.size() > room) inputs = inputs.subList(0, room);
         if (store)
             addTile(root, PLAY_STORE, "Play Store", null, LineIcon.PLAY, null, m + col++ * (w + g), bottomTop, w, h);
@@ -566,6 +617,7 @@ public class MainActivity extends Activity {
         // The last icon's right edge lines up with the apps' (its focus circle sticks out past them).
         int qx = getResources().getDisplayMetrics().widthPixels - m + (ib - px(ICON_SIZE)) / 2
                 - (quick.size() + 1) * ib - quick.size() * ig;
+        addStorageNote(getResources().getDisplayMetrics().widthPixels - qx + ig);
         for (int q : quick) {
             addIcon(QUICK + QUICK_NAMES[q], Strings.t(QUICK_LABELS[q]), new LineIcon(QUICK_ICONS[q]), qx);
             qx += ib + ig;
@@ -601,16 +653,18 @@ public class MainActivity extends Activity {
             inner.setOrientation(LinearLayout.VERTICAL);
             inner.setGravity(Gravity.CENTER);
             ImageView iv = new ImageView(this);
-            int size = lineIcon != null ? px(44) : px(64);
+            int size = lineIcon != null ? px(44) : glassOnly ? px(80) : px(64);
             if (lineIcon != null) iv.setImageDrawable(new LineIcon(lineIcon));
             else if (appIcon != null) iv.setImageDrawable(fit(appIcon, size, size));
             inner.addView(iv, new LinearLayout.LayoutParams(size, size));
-            TextView t = text(px(24), 0xE0FFFFFF, regular);
+            // Narrow tiles (Compact, Minimal) give the name more of their width, so "Add app" still fits.
+            boolean narrow = w < px(240);
+            TextView t = text(narrow ? px(22) : px(24), 0xE0FFFFFF, regular);
             t.setText(label);
             t.setSingleLine(true);
             t.setEllipsize(android.text.TextUtils.TruncateAt.END);
             t.setGravity(Gravity.CENTER);
-            t.setPadding(px(16), 0, px(16), 0);
+            t.setPadding(narrow ? px(6) : px(16), 0, narrow ? px(6) : px(16), 0);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
             lp.topMargin = px(12);
             inner.addView(t, lp);
@@ -626,7 +680,8 @@ public class MainActivity extends Activity {
         if (caption != null) {
             caption.setText(label);
             caption.setGravity(Gravity.CENTER_HORIZONTAL);
-            caption.setVisibility(View.INVISIBLE);
+            caption.setVisibility(alwaysNames ? View.VISIBLE : View.INVISIBLE);
+            if (alwaysNames) caption.setAlpha(NAME_REST);
         }
 
         final boolean glass = banner == null;
@@ -634,7 +689,10 @@ public class MainActivity extends Activity {
             if (has) focusedKey = key;
             lift(v, bg, has, glass ? 0x13FFFFFF : 0xFF1E1A1C, glass ? 0x38FFFFFF : 0xFF1E1A1C,
                     px(RADIUS), px(RADIUS + RADIUS_UP));
-            if (caption != null) {
+            if (caption != null && alwaysNames) {
+                caption.animate().cancel();
+                caption.animate().alpha(has ? 1f : NAME_REST).setDuration(FOCUS_MS).setInterpolator(FOCUS_EASE).start();
+            } else if (caption != null) {
                 caption.animate().cancel();
                 if (has) {
                     caption.setVisibility(View.VISIBLE);
@@ -742,6 +800,50 @@ public class MainActivity extends Activity {
         return Math.round(a + (b - a) * t);
     }
 
+    // Names shown under every banner (Cinema) rest dimmed, so the focused one still stands out.
+    private static final float NAME_REST = 0.55f;
+
+    // How much of the TV's own storage is free, as {free bytes, total bytes}.
+    private static long[] storage() {
+        try {
+            android.os.StatFs fs = new android.os.StatFs(android.os.Environment.getDataDirectory().getPath());
+            return new long[] {fs.getAvailableBytes(), fs.getTotalBytes()};
+        } catch (Exception e) {
+            return new long[] {1, 1};
+        }
+    }
+
+    // A quiet note left of the icons, only while storage is low: a full box slows everything down.
+    // OK opens Android's storage page. Placed from the right, so it needs no measuring.
+    private void addStorageNote(int right) {
+        long[] st = storage();
+        if (st[1] <= 0 || st[0] >= st[1] * STORAGE_LOW) return;
+        final TextView t = text(px(26), st[0] < st[1] * STORAGE_VERY_LOW ? 0xFFFFC266 : 0xD9FFFFFF, regular);
+        t.setText(String.format(Strings.t("%s free"), android.text.format.Formatter.formatShortFileSize(this, st[0])));
+        t.setGravity(Gravity.CENTER);
+        t.setSingleLine(true);
+        t.setPadding(px(24), 0, px(24), 0);
+        final GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(px(ICON_BUTTON) / 2f);
+        bg.setColor(0x13FFFFFF);
+        t.setBackground(bg);
+        t.setFocusable(true);
+        t.setTag(STORAGE);
+        t.setOnFocusChangeListener((v, has) -> {
+            if (has) focusedKey = STORAGE;
+            lift(v, bg, has, 0x13FFFFFF, 0x38FFFFFF, px(ICON_BUTTON) / 2, px(ICON_BUTTON) / 2);
+        });
+        t.setOnClickListener(v -> open(STORAGE));
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setClipChildren(false);
+        wrap.addView(t, new FrameLayout.LayoutParams(-2, px(ICON_BUTTON)));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, px(ICON_BUTTON), Gravity.TOP | Gravity.END);
+        lp.topMargin = px(ICON_TOP);
+        lp.rightMargin = right;
+        root.addView(wrap, lp);
+        tiles.add(t);
+    }
+
     // An icon on its own, no tile or label: a glass circle shows behind it only while it's focused.
     private ImageView addIcon(final String key, String label, Drawable icon, int x) {
         int b = px(ICON_BUTTON), size = px(ICON_SIZE);
@@ -774,15 +876,30 @@ public class MainActivity extends Activity {
         if (ADD.equals(key)) {
             showAddMenu(-1);
             return;
+        } else if (STORAGE.equals(key)) {
+            try {
+                startActivity(new Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e) {
+                openTvSettings();
+            }
+            return;
         } else if (SETTINGS.equals(key)) {
             // A box has no screen of its own to dim: its picture is the TV's, on the TV's remote. On NVIDIA
             // Shield, Brightness also fell back to a Display & Sound page that's listed but missing there.
             List<String> list = new ArrayList<>(Arrays.asList(SETTINGS_ITEMS));
             if (isBox(this)) list.remove("Brightness");
+            // Google TV stays on behind this screen: a way there, and a switch for the Home button service.
+            if (HomeButton.hasGoogleTv(this)) {
+                list.add("Open Google TV");
+                list.add(HomeButton.catchHome(this) ? "Catch Home: on" : "Catch Home: off");
+            }
             final String[] items = list.toArray(new String[0]);
             dropdown(tile(SETTINGS), items, which -> {
                 if ("Wallpaper".equals(items[which])) showWallpapers();
+                else if ("Layout".equals(items[which])) showLayouts();
                 else if ("Brightness".equals(items[which])) openBrightness();
+                else if ("Open Google TV".equals(items[which])) HomeButton.openGoogleTv(this);
+                else if (items[which].startsWith("Catch Home")) HomeButton.setCatchHome(this, !HomeButton.catchHome(this));
                 else openTvSettings();
             });
             return;
@@ -1339,11 +1456,11 @@ public class MainActivity extends Activity {
 
     // Where app number i sits in the grid.
     private int gridX(int i) {
-        return px(MARGIN) + (i % PER_ROW) * (tileW + px(GAP));
+        return px(MARGIN) + (i % perRow) * (tileW + px(gap));
     }
 
     private int gridY(int i) {
-        return gridTop + (i / PER_ROW) * px(ROW_STEP);
+        return gridTop + (i / perRow) * px(rowStep);
     }
 
     private View tile(String key) {
@@ -1366,7 +1483,7 @@ public class MainActivity extends Activity {
 
     private boolean moveKey(String key, int code, boolean ok, boolean down) {
         int step = code == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : code == KeyEvent.KEYCODE_DPAD_RIGHT ? 1
-                : code == KeyEvent.KEYCODE_DPAD_UP ? -PER_ROW : code == KeyEvent.KEYCODE_DPAD_DOWN ? PER_ROW : 0;
+                : code == KeyEvent.KEYCODE_DPAD_UP ? -perRow : code == KeyEvent.KEYCODE_DPAD_DOWN ? perRow : 0;
         if (step != 0) {
             int from = rowApps.indexOf(key), to = from + step;
             if (down && to >= 0 && to < rowApps.size()) {
