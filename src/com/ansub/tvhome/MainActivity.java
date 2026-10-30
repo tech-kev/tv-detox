@@ -147,6 +147,13 @@ public class MainActivity extends Activity {
     private static final long WEATHER_EVERY_MS = 30 * 60 * 1000;
     private TextView weatherView;
     private boolean weatherLoading;
+    // Seasonal accents (Cinema): what today brings, and the animations, run with the lights off unless set
+    // to always or off (Settings > Animations).
+    private static final String[] ANIM_MODES = {"idle", "always", "off"};
+    private static final String[] ANIM_LABELS = {"Animations: when idle", "Animations: always", "Animations: off"};
+    private Seasons.Accent accent = new Seasons.Accent();
+    private ParticleView particles;
+    private boolean resumed;
     private static final int EDGE = 260; // the soft bottom edge's height
     private static final long LIGHTS_OFF_MS = 60000, LIGHTS_FADE_MS = 1200, GLOW_MS = 450;
     private static final String JOKE_URL = "https://v2.jokeapi.dev/joke/Miscellaneous,Dark,Pun,Spooky,Christmas?lang=";
@@ -269,7 +276,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
         tp.topMargin = px(-20 * clockSize / 176); // pull the big digits up under the date
         clock.addView(time, tp);
-        if (getSharedPreferences(PREFS, 0).getString("weather", null) != null) {
+        if (cinema || getSharedPreferences(PREFS, 0).getString("weather", null) != null) {
             weatherView = text(px(dateSize + 2), 0xD9FFFFFF, regular);
             weatherView.setText(getSharedPreferences(PREFS, 0).getString("weather_text", ""));
             LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-2, -2);
@@ -318,6 +325,8 @@ public class MainActivity extends Activity {
             edgeView = new View(this);
             stage.addView(edgeView, new FrameLayout.LayoutParams(-1, px(EDGE), Gravity.BOTTOM));
             paintEdge(WALLPAPERS[wallpaper()]);
+            particles = new ParticleView(this);
+            stage.addView(particles, new FrameLayout.LayoutParams(-1, -1));
             setContentView(stage);
         } else setContentView(scroller);
 
@@ -355,7 +364,8 @@ public class MainActivity extends Activity {
             if (first != null) first.requestFocus();
         }
         // A clock or layout change needs the whole page rebuilt; a new app list only needs the tiles.
-        boolean clock = intent != null && (intent.hasExtra("clock") || intent.hasExtra("layout") || intent.hasExtra("weather"));
+        boolean clock = intent != null && (intent.hasExtra("clock") || intent.hasExtra("layout") || intent.hasExtra("weather")
+                || intent.hasExtra("birthdays") || intent.hasExtra("seasondate"));
         if (saveConfig(intent)) {
             if (clock) recreate();
             else buildTiles();
@@ -374,7 +384,10 @@ public class MainActivity extends Activity {
         String fake = intent == null ? null : intent.getStringExtra("fakeinputs");
         String layout = intent == null ? null : intent.getStringExtra("layout");
         String weather = intent == null ? null : intent.getStringExtra("weather");
-        if (apps == null && quick == null && clock == null && fake == null && layout == null && weather == null) return false;
+        String birthdays = intent == null ? null : intent.getStringExtra("birthdays");
+        String seasonDate = intent == null ? null : intent.getStringExtra("seasondate");
+        if (apps == null && quick == null && clock == null && fake == null && layout == null && weather == null
+                && birthdays == null && seasonDate == null) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, 0);
         String stamp = intent.getStringExtra("stamp");
         if (stamp != null && stamp.equals(prefs.getString("stamp", null))) return false;
@@ -394,6 +407,15 @@ public class MainActivity extends Activity {
             clock = clock.trim();
             if (clock.isEmpty() || clock.equalsIgnoreCase("auto")) e.remove(PREF_CLOCK);
             else e.putString(PREF_CLOCK, clock);
+        }
+        // Birthdays as "Name=MM-DD,..." and a date to try a season with ("yyyy-MM-dd HH:mm"); "none" clears.
+        if (birthdays != null) {
+            if (birthdays.trim().isEmpty() || birthdays.trim().equalsIgnoreCase("none")) e.remove("birthdays");
+            else e.putString("birthdays", birthdays.trim());
+        }
+        if (seasonDate != null) {
+            if (seasonDate.trim().isEmpty() || seasonDate.trim().equalsIgnoreCase("none")) e.remove("season_date");
+            else e.putString("season_date", seasonDate.trim());
         }
         // The place for the weather, as "lat,lon"; "none" takes the weather away.
         if (weather != null) {
@@ -458,9 +480,9 @@ public class MainActivity extends Activity {
         refreshNetwork();
         View f = getCurrentFocus();
         if (f == null && !tiles.isEmpty()) tiles.get(0).requestFocus();
+        resumed = true;
         if (cinema) {
-            greet();
-            loadJoke();
+            applySeason();
             lightsOn(false);
         }
         loadWeather();
@@ -481,6 +503,8 @@ public class MainActivity extends Activity {
         root.removeCallbacks(lightsOff);
         root.removeCallbacks(greeting);
         root.removeCallbacks(weatherTick);
+        resumed = false;
+        if (particles != null) particles.setRunning(false);
     }
 
     // Back from a menu or a window on top (like the uninstall prompt): catch up on apps that changed.
@@ -546,7 +570,10 @@ public class MainActivity extends Activity {
             View c = root.getChildAt(i);
             if (c != clockView) c.animate().alpha(LIGHTS_DIM).setDuration(LIGHTS_FADE_MS).start();
         }
-        glowView.animate().alpha(0.3f).setDuration(LIGHTS_FADE_MS).start();
+        // The season's colour lights the dark page, a little brighter than the plain dim glow.
+        if (accent.glow != 0) glow((accent.glow & 0x00FFFFFF) | 0x70000000);
+        glowView.animate().alpha(accent.glow != 0 ? 0.7f : 0.3f).setDuration(LIGHTS_FADE_MS).start();
+        updateParticles();
     };
 
     private void lightsOn(boolean fade) {
@@ -563,24 +590,100 @@ public class MainActivity extends Activity {
         View f = getCurrentFocus();
         if (f != null) {
             f.animate().scaleX(CINEMA_LIFT).scaleY(CINEMA_LIFT).translationZ(px(26)).setDuration(FOCUS_MS).start();
+            if (f.getTag() instanceof String) spotlight((String) f.getTag());
             clearEdge(f);
         }
         root.removeCallbacks(lightsOff);
         root.postDelayed(lightsOff, LIGHTS_OFF_MS);
+        updateParticles();
+    }
+
+    private String animMode() {
+        String m = getSharedPreferences(PREFS, 0).getString("anim", "idle");
+        return Arrays.asList(ANIM_MODES).contains(m) ? m : "idle";
+    }
+
+    private boolean seasonsOn() {
+        return getSharedPreferences(PREFS, 0).getBoolean("seasons", true);
+    }
+
+    private void updateParticles() {
+        if (particles == null) return;
+        String mode = animMode();
+        particles.setRunning(resumed && !"off".equals(mode) && ("always".equals(mode) || dark));
+    }
+
+    // Today as the seasons see it; --es seasondate "2026-12-24 20:00" fakes it, to try a season out.
+    private java.util.Calendar seasonNow() {
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        String fake = getSharedPreferences(PREFS, 0).getString("season_date", null);
+        if (fake != null) try {
+            now.setTime(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT).parse(fake));
+        } catch (Exception ignored) {}
+        return now;
+    }
+
+    // Greeting, emoji, countdown, light, animations and the season's jokes, for today. Checked again every
+    // quarter of an hour (every half minute in the last hour of the year, for the countdown).
+    private void applySeason() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, 0);
+        java.util.Calendar now = seasonNow();
+        accent = seasonsOn() ? Seasons.today(now, prefs.getString("birthdays", null), "de".equals(Strings.lang()))
+                : new Seasons.Accent();
+        // Real weather adds its own: snow when it snows, rain, and the odd flash in a thunderstorm.
+        int code = prefs.getInt("weather_code", -1);
+        List<Integer> fx = new ArrayList<>();
+        for (int e : accent.effects) fx.add(e);
+        if (seasonsOn() && prefs.getString("weather", null) != null) {
+            boolean snow = (code >= 71 && code <= 77) || code == 85 || code == 86;
+            if (snow && !fx.contains(Seasons.SNOW)) fx.add(Seasons.SNOW);
+            if (code >= 95) fx.add(Seasons.LIGHTNING);
+            if (((code >= 61 && code <= 67) || (code >= 80 && code <= 82) || code >= 95) && !fx.contains(Seasons.SNOW))
+                fx.add(Seasons.RAIN);
+        }
+        int[] all = new int[fx.size()];
+        for (int i = 0; i < all.length; i++) all[i] = fx.get(i);
+        particles.setEffects(all);
+        greet();
+        showWeatherLine();
+        if (accent.jokes != null) {
+            jokeView.setText(accent.jokes[now.get(java.util.Calendar.DAY_OF_YEAR) % accent.jokes.length]);
+            jokeHead.setVisibility(View.VISIBLE);
+        } else {
+            jokeView.setText(prefs.getString("joke", ""));
+            jokeHead.setVisibility(jokeView.getText().length() > 0 ? View.VISIBLE : View.GONE);
+            loadJoke();
+        }
+        updateParticles();
+        root.removeCallbacks(greeting);
+        boolean lastHour = now.get(java.util.Calendar.MONTH) == java.util.Calendar.DECEMBER
+                && now.get(java.util.Calendar.DAY_OF_MONTH) == 31 && now.get(java.util.Calendar.HOUR_OF_DAY) == 23;
+        root.postDelayed(greeting, lastHour ? 30 * 1000 : 15 * 60 * 1000);
+    }
+
+    // The weather and, in Cinema, what's coming: "6° · Partly cloudy · Tomorrow is Halloween".
+    private void showWeatherLine() {
+        if (weatherView == null) return;
+        SharedPreferences prefs = getSharedPreferences(PREFS, 0);
+        String w = prefs.getString("weather", null) != null ? prefs.getString("weather_text", "") : "";
+        String note = cinema ? accent.note : null;
+        String line = w.isEmpty() ? (note == null ? "" : note) : note == null ? w : w + "  ·  " + note;
+        weatherView.setText(line);
+        weatherView.setVisibility(line.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     // "Good evening · Friday, 30 October", checked again every quarter of an hour.
-    private final Runnable greeting = this::greet;
+    private final Runnable greeting = this::applySeason;
 
     private void greet() {
-        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
-        String hello = Strings.t(h >= 5 && h < 11 ? "Good morning" : h >= 11 && h < 17 ? "Good afternoon"
+        int h = seasonNow().get(java.util.Calendar.HOUR_OF_DAY);
+        String hello = accent.greeting != null ? String.format(Strings.t(accent.greeting), accent.name)
+                : Strings.t(h >= 5 && h < 11 ? "Good morning" : h >= 11 && h < 17 ? "Good afternoon"
                 : h >= 17 && h < 23 ? "Good evening" : "Good night");
+        if (!accent.emoji.isEmpty()) hello = accent.emoji + "  " + hello;
         String f = "'" + hello.replace("'", "''") + "' · " + Strings.datePattern();
         dateView.setFormat12Hour(f);
         dateView.setFormat24Hour(f);
-        root.removeCallbacks(greeting);
-        root.postDelayed(greeting, 15 * 60 * 1000);
     }
 
     private final Runnable weatherTick = this::loadWeather;
@@ -596,6 +699,7 @@ public class MainActivity extends Activity {
         if (weatherLoading || System.currentTimeMillis() - prefs.getLong("weather_at", 0) < WEATHER_EVERY_MS) return;
         weatherLoading = true;
         final String[] ll = place.split(",");
+        final int[] code = {-1};
         new Thread(() -> {
             String text = null;
             try {
@@ -608,7 +712,8 @@ public class MainActivity extends Activity {
                     byte[] buf = new byte[4096];
                     for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
                     org.json.JSONObject now = new org.json.JSONObject(out.toString("UTF-8")).getJSONObject("current");
-                    text = Math.round(now.getDouble("temperature_2m")) + "° · " + Strings.t(weatherName(now.getInt("weather_code")));
+                    code[0] = now.getInt("weather_code");
+                    text = Math.round(now.getDouble("temperature_2m")) + "° · " + Strings.t(weatherName(code[0]));
                 } finally {
                     c.disconnect();
                 }
@@ -617,8 +722,10 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 weatherLoading = false;
                 if (got == null) return;
-                prefs.edit().putString("weather_text", got).putLong("weather_at", System.currentTimeMillis()).apply();
-                if (weatherView != null) weatherView.setText(got);
+                prefs.edit().putString("weather_text", got).putInt("weather_code", code[0])
+                        .putLong("weather_at", System.currentTimeMillis()).apply();
+                if (cinema && resumed) applySeason();
+                else if (weatherView != null) weatherView.setText(got);
             });
         }).start();
     }
@@ -671,7 +778,7 @@ public class MainActivity extends Activity {
                 jokeLoading = false;
                 if (got == null || got.trim().isEmpty()) return;
                 prefs.edit().putString("joke", got.trim()).putString("joke_day", today).putString("joke_url", JOKE_URL).apply();
-                if (jokeView != null) {
+                if (jokeView != null && accent.jokes == null) {
                     jokeView.setText(got.trim());
                     jokeHead.setVisibility(View.VISIBLE);
                 }
@@ -1254,6 +1361,10 @@ public class MainActivity extends Activity {
                 list.add("Restart…");
                 list.add(HomeButton.catchHome(this) ? "Catch Home: on" : "Catch Home: off");
             }
+            if (cinema) {
+                list.add(seasonsOn() ? "Seasons: on" : "Seasons: off");
+                list.add(ANIM_LABELS[Arrays.asList(ANIM_MODES).indexOf(animMode())]);
+            }
             final String[] items = list.toArray(new String[0]);
             dropdown(tile(SETTINGS), items, which -> {
                 if ("Wallpaper".equals(items[which])) showWallpapers();
@@ -1262,6 +1373,14 @@ public class MainActivity extends Activity {
                 else if ("Open Google TV".equals(items[which])) HomeButton.openGoogleTv(this);
                 else if ("Restart…".equals(items[which])) { if (!HomeButton.powerMenu()) openTvSettings(); }
                 else if (items[which].startsWith("Catch Home")) HomeButton.setCatchHome(this, !HomeButton.catchHome(this));
+                else if (items[which].startsWith("Seasons")) {
+                    getSharedPreferences(PREFS, 0).edit().putBoolean("seasons", !seasonsOn()).apply();
+                    applySeason();
+                } else if (items[which].startsWith("Animations")) {
+                    int next = (Arrays.asList(ANIM_MODES).indexOf(animMode()) + 1) % ANIM_MODES.length;
+                    getSharedPreferences(PREFS, 0).edit().putString("anim", ANIM_MODES[next]).apply();
+                    updateParticles();
+                }
                 else openTvSettings();
             });
             return;

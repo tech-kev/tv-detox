@@ -18,6 +18,7 @@ final class Strings {
         "Good morning", "Good afternoon", "Good evening", "Good night", "Joke of the day", "Restart…",
         "Clear", "Mostly clear", "Partly cloudy", "Overcast", "Fog", "Drizzle", "Rain", "Snow", "Showers",
         "Snow showers", "Thunderstorm", "Cloudy",
+        "Happy birthday, %s!", "Happy New Year!", "Happy New Year's Eve!", "Merry Christmas", "Happy St. Nicholas' Day", "Happy Advent Sunday %s", "Narri Narro!", "Happy Valentine's Day", "Happy Easter", "Happy May Day", "O'zapft is!", "Happy Halloween", "Happy St. Martin's Day", "Almost there!", "%d minutes to %d", "Tomorrow is Halloween", "Tomorrow is St. Nicholas' Day", "Tomorrow is New Year's Eve", "Tomorrow is Christmas Eve", "%d days until Christmas Eve", "Tomorrow is %s's birthday", "In %d days it's %s's birthday", "Seasons: on", "Seasons: off", "Animations: when idle", "Animations: always", "Animations: off",
     };
 
     // Keyed by language ("de"), or language-country ("zh-TW") where a country writes it differently.
@@ -39,6 +40,7 @@ final class Strings {
             "Guten Morgen", "Guten Tag", "Guten Abend", "Gute Nacht", "Witz des Tages", "Neu starten…",
             "Klar", "Überwiegend klar", "Teilweise bewölkt", "Bedeckt", "Nebel", "Nieselregen", "Regen", "Schnee", "Schauer",
             "Schneeschauer", "Gewitter", "Bewölkt",
+            "Alles Gute, %s!", "Frohes neues Jahr!", "Guten Rutsch!", "Frohe Weihnachten", "Schönen Nikolaustag", "Schönen %s. Advent", "Narri Narro!", "Schönen Valentinstag", "Frohe Ostern", "Schönen Maifeiertag", "O'zapft is!", "Happy Halloween", "Schönen Martinstag", "Gleich ist es so weit!", "Noch %d Minuten bis %d", "Morgen ist Halloween", "Morgen ist Nikolaus", "Morgen ist Silvester", "Morgen ist Heiligabend", "Noch %d Tage bis Heiligabend", "Morgen hat %s Geburtstag", "In %d Tagen hat %s Geburtstag", "Saisonales: an", "Saisonales: aus", "Animationen: bei Licht aus", "Animationen: immer", "Animationen: aus",
         });
         LANGS.put("es", new String[] {
             "Ajustes", "Añadir app", "Red", "Sin conexión", "Sonido", "Imagen",

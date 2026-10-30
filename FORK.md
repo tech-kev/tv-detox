@@ -50,6 +50,22 @@ adb shell am start -n com.ansub.tvhome/.MainActivity --es weather "<breite>,<lä
 |---|---|---|
 | ![Kino, Prime Video](docs/screenshots/cinema-prime.png) | ![Kino, dritte Reihe](docs/screenshots/cinema-row3.png) | ![Kino, Licht aus](docs/screenshots/cinema-lights-off.png) |
 
+**Saisonale Akzente (Kino)** – `Seasons.java`, `ParticleView.java`
+- Begrüßung, Emoji davor, Lichtfarbe, Countdown in der Wetterzeile und eigene Witze je nach Anlass:
+  Neujahr, Fasnet (Gumpiger Donnerstag–Fasnetsdienstag), Valentinstag, Ostern, 1. Mai, Oktoberfest,
+  Halloween (24.–31.10.), Martini, Advent (Kerzen zählen mit), Nikolaus, Weihnachten, Silvester (Countdown ab 23 Uhr).
+  Bewegliche Termine werden offline berechnet.
+- Animationen (Schnee, Konfetti, Fledermäuse, Herzen, Eier, Rauten, Feuerwerk, Funkeln) mit max. ~40 Partikeln;
+  Einstellungen → „Animationen: bei Licht aus / immer / aus“, „Saisonales: an/aus“.
+- Wetter-Akzente: echter Schnee → Schneefall, Regen, bei Gewitter gelegentliches Wetterleuchten.
+- Geburtstage nur auf dem TV: `--es birthdays "Name=MM-TT,Name=MM-TT"` (`none` löscht).
+- Zum Ausprobieren: `--es seasondate "2026-12-24 20:00"` (`none` zurück).
+- Eigene deutsche Halloween- und Weihnachtswitze (JokeAPI hat dafür auf Deutsch keine bzw. nur einen).
+
+| Heiligabend (Licht aus) | Neujahr (Licht aus) |
+|---|---|
+| ![Weihnachten](docs/screenshots/season-christmas.png) | ![Neujahr](docs/screenshots/season-newyear.png) |
+
 **Speicherhinweis**: oben rechts neben dem Netzwerk-Symbol, wenn weniger als 15 % frei sind (orange unter
 10 %). OK öffnet die Speicher-Einstellungen.
 
