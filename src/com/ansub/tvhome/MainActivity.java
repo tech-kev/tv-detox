@@ -124,17 +124,32 @@ public class MainActivity extends Activity {
     private static final Interpolator FOCUS_EASE = new DecelerateInterpolator(1.8f);
     // Layouts, picked under Settings > Layout. Each one: apps per row, the gap between them, tile height in
     // sixteenths of its width, the step from one row to the next, where a single row of apps sits and how high
-    // more rows may push the grid (not into the clock), the clock's and date's size, then three switches:
-    // clock centred, app names always shown, and plain glass tiles with the app's icon instead of its banner.
+    // more rows may push the grid (not into the clock), the clock's and date's size, then: clock centred,
+    // app names (0 on focus, 1 always, 2 never), plain glass tiles with the app's icon instead of its banner,
+    // and the cinema extras (light in the focused app's colour, a soft bottom edge, lights off when idle, a
+    // greeting and a joke of the day).
     private static final String[] LAYOUT_NAMES = {"Classic", "Compact", "Cinema", "Minimal"};
     private static final int[][] LAYOUTS = {
-        {6, 36, 9, 224, 604, 400, 176, 30, 0, 0, 0},
-        {8, 28, 9, 170, 560, 300, 112, 26, 0, 0, 0},
-        {5, 40, 9, 250, 560, 440, 220, 32, 1, 1, 0},
-        {7, 32, 10, 172, 600, 330, 140, 28, 0, 0, 1},
+        {6, 36, 9, 224, 604, 400, 176, 30, 0, 0, 0, 0},
+        {8, 28, 9, 170, 560, 300, 112, 26, 0, 0, 0, 0},
+        {5, 40, 9, 220, 640, 560, 220, 32, 1, 2, 0, 1},
+        {7, 32, 10, 172, 600, 330, 140, 28, 0, 0, 1, 0},
     };
     private int perRow, gap, tileShape, rowStep, row1Top, gridMinTop, clockSize, dateSize;
-    private boolean clockCentred, alwaysNames, glassOnly;
+    private boolean clockCentred, alwaysNames, noNames, glassOnly, cinema;
+    // Cinema: the others step back to this, the focused app grows a little more, the lights go off after
+    // this long without a key, and the joke is fetched once a day.
+    private static final float SPOTLIGHT_REST = 0.5f, CINEMA_LIFT = 1.12f;
+    private static final long LIGHTS_OFF_MS = 20000, LIGHTS_FADE_MS = 1200, GLOW_MS = 450;
+    private static final String JOKE_URL = "https://v2.jokeapi.dev/joke/Any?safe-mode&type=single&lang=";
+    private TextClock dateView;
+    private TextView jokeView;
+    private View clockView, glowView, edgeView;
+    private ScrollView scroller;
+    private final Map<String, Integer> tints = new java.util.HashMap<>(); // each app's colour, worked out once
+    private int glowColor = Color.TRANSPARENT;
+    private ValueAnimator glowFade;
+    private boolean dark, waking, jokeLoading;
     // Storage below this share free gets a note by the icons; below the second it turns amber.
     private static final float STORAGE_LOW = 0.15f, STORAGE_VERY_LOW = 0.10f;
     private static final int ICON_TOP = 76, ICON_BUTTON = 72, ICON_SIZE = 40, ICON_GAP = 12; // level with the date
@@ -217,7 +232,7 @@ public class MainActivity extends Activity {
         showWallpaper(wallpaper());
         applyLayout(LAYOUTS[layout()]);
 
-        ScrollView scroller = new ScrollView(this);
+        scroller = new ScrollView(this);
         scroller.setFillViewport(true);
         scroller.setVerticalScrollBarEnabled(false);
         scroller.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -232,6 +247,7 @@ public class MainActivity extends Activity {
         shownLocale = java.util.Locale.getDefault();
         String day = Strings.datePattern();
         TextClock date = clock(day, day, px(dateSize), 0xA8FFFFFF, regular);
+        dateView = date;
         // The clock follows the TV unless --es clock 12 or 24 says otherwise.
         String clockPref = prefs().getString(PREF_CLOCK, null);
         TextClock time = clock("24".equals(clockPref) ? "H:mm" : "h:mm", "12".equals(clockPref) ? "h:mm" : "H:mm",
@@ -245,6 +261,18 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
         tp.topMargin = px(-20 * clockSize / 176); // pull the big digits up under the date
         clock.addView(time, tp);
+        if (cinema) {
+            jokeView = text(px(28), 0xB3FFFFFF, regular);
+            jokeView.setGravity(Gravity.CENTER_HORIZONTAL);
+            jokeView.setMaxLines(3);
+            jokeView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            jokeView.setLineSpacing(px(6), 1f);
+            jokeView.setText(getSharedPreferences(PREFS, 0).getString("joke", ""));
+            LinearLayout.LayoutParams jp = new LinearLayout.LayoutParams(px(1300), -2);
+            jp.topMargin = px(12);
+            clock.addView(jokeView, jp);
+        }
+        clockView = clock;
         if (clockCentred) {
             FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL);
             cl.topMargin = px(92);
@@ -256,7 +284,19 @@ public class MainActivity extends Activity {
         moveHint.setVisibility(View.GONE);
         root.addView(moveHint, at(px(MARGIN), px(row1Top - 64), -2, -2));
 
-        setContentView(scroller);
+        if (cinema) {
+            // Behind the page, a light in the focused app's colour; over it, the bottom edge fading into the
+            // wallpaper like a screen's, so a cut-off row reads as more to come.
+            FrameLayout stage = new FrameLayout(this);
+            glowView = new View(this);
+            glowView.setBackground(radial(Color.TRANSPARENT, 0.5f, 0.95f, px(1150)));
+            stage.addView(glowView, new FrameLayout.LayoutParams(-1, -1));
+            stage.addView(scroller, new FrameLayout.LayoutParams(-1, -1));
+            edgeView = new View(this);
+            stage.addView(edgeView, new FrameLayout.LayoutParams(-1, px(300), Gravity.BOTTOM));
+            paintEdge(WALLPAPERS[wallpaper()]);
+            setContentView(stage);
+        } else setContentView(scroller);
 
         IntentFilter f = new IntentFilter();
         f.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -381,6 +421,11 @@ public class MainActivity extends Activity {
         refreshNetwork();
         View f = getCurrentFocus();
         if (f == null && !tiles.isEmpty()) tiles.get(0).requestFocus();
+        if (cinema) {
+            greet();
+            loadJoke();
+            lightsOn(false);
+        }
         HomeButton.onHomeResumed(this); // back on this home screen: Home comes here again
         // Only counted as opened once it has stayed up a moment, so a crash right after opening still
         // counts as a failed launch.
@@ -395,12 +440,19 @@ public class MainActivity extends Activity {
         // Left normally (an app or Settings opened), so it didn't crash.
         getWindow().getDecorView().removeCallbacks(homeOk);
         HomeButton.onHomeOk(this);
+        root.removeCallbacks(lightsOff);
+        root.removeCallbacks(greeting);
     }
 
     // Back from a menu or a window on top (like the uninstall prompt): catch up on apps that changed.
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        // A menu on top keeps the lights on; they count down again once it's closed.
+        if (cinema) {
+            root.removeCallbacks(lightsOff);
+            if (hasFocus && !dark) root.postDelayed(lightsOff, LIGHTS_OFF_MS);
+        }
         if (hasFocus) refreshApps();
         else okDownKey = null; // an OK still held finishes in the window that took over
     }
@@ -422,6 +474,103 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() { /* home screen: nothing to go back to */ }
+
+    // Cinema: any key counts as someone there. With the lights off, the first key only turns them back on,
+    // so a press meant to wake the screen doesn't open an app.
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent ev) {
+        if (cinema) {
+            if (dark && ev.getAction() == KeyEvent.ACTION_DOWN) {
+                waking = true;
+                lightsOn(true);
+                return true;
+            }
+            if (waking) {
+                if (ev.getAction() == KeyEvent.ACTION_UP) waking = false;
+                return true;
+            }
+            root.removeCallbacks(lightsOff);
+            root.postDelayed(lightsOff, LIGHTS_OFF_MS);
+        }
+        return super.dispatchKeyEvent(ev);
+    }
+
+    private final Runnable lightsOff = () -> {
+        if (!hasWindowFocus() || movingKey != null) return;
+        dark = true;
+        scroller.smoothScrollTo(0, 0);
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View c = root.getChildAt(i);
+            if (c != clockView) c.animate().alpha(0f).setDuration(LIGHTS_FADE_MS).start();
+        }
+        glowView.animate().alpha(0f).setDuration(LIGHTS_FADE_MS).start();
+    };
+
+    private void lightsOn(boolean fade) {
+        dark = false;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View c = root.getChildAt(i);
+            c.animate().cancel();
+            if (fade) c.animate().alpha(1f).setDuration(FOCUS_MS * 2).start();
+            else c.setAlpha(1f);
+        }
+        glowView.animate().cancel();
+        if (fade) glowView.animate().alpha(1f).setDuration(FOCUS_MS * 2).start();
+        else glowView.setAlpha(1f);
+        View f = getCurrentFocus();
+        if (f != null) f.requestRectangleOnScreen(new android.graphics.Rect(0, 0, f.getWidth(), f.getHeight()));
+        root.removeCallbacks(lightsOff);
+        root.postDelayed(lightsOff, LIGHTS_OFF_MS);
+    }
+
+    // "Good evening · Friday, 30 October", checked again every quarter of an hour.
+    private final Runnable greeting = this::greet;
+
+    private void greet() {
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        String hello = Strings.t(h >= 5 && h < 11 ? "Good morning" : h >= 11 && h < 17 ? "Good afternoon"
+                : h >= 17 && h < 23 ? "Good evening" : "Good night");
+        String f = "'" + hello.replace("'", "''") + "' · " + Strings.datePattern();
+        dateView.setFormat12Hour(f);
+        dateView.setFormat24Hour(f);
+        root.removeCallbacks(greeting);
+        root.postDelayed(greeting, 15 * 60 * 1000);
+    }
+
+    // The joke of the day: one a day from JokeAPI (safe mode only), kept for the day. Without a
+    // connection yesterday's stays.
+    private void loadJoke() {
+        final SharedPreferences prefs = getSharedPreferences(PREFS, 0);
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        final String today = now.get(java.util.Calendar.YEAR) + "-" + now.get(java.util.Calendar.DAY_OF_YEAR);
+        if (today.equals(prefs.getString("joke_day", null)) || jokeLoading) return;
+        jokeLoading = true;
+        final String lang = Arrays.asList("de", "cs", "es", "fr", "pt").contains(Strings.lang()) ? Strings.lang() : "en";
+        new Thread(() -> {
+            String joke = null;
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(JOKE_URL + lang).openConnection();
+                c.setConnectTimeout(5000);
+                c.setReadTimeout(5000);
+                try (java.io.InputStream in = c.getInputStream()) {
+                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[4096];
+                    for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+                    org.json.JSONObject o = new org.json.JSONObject(out.toString("UTF-8"));
+                    if (!o.optBoolean("error", true)) joke = o.optString("joke", null);
+                } finally {
+                    c.disconnect();
+                }
+            } catch (Exception ignored) {}
+            final String got = joke;
+            runOnUiThread(() -> {
+                jokeLoading = false;
+                if (got == null || got.trim().isEmpty()) return;
+                prefs.edit().putString("joke", got.trim()).putString("joke_day", today).apply();
+                if (jokeView != null) jokeView.setText(got.trim());
+            });
+        }).start();
+    }
 
     // Holding Back opens Google TV's own home screen, where it stays on (see HomeButton). Spotted on a
     // key repeat, or when Back is let go if the remote sends none.
@@ -484,6 +633,13 @@ public class MainActivity extends Activity {
 
     private void showWallpaper(int i) {
         getWindow().setBackgroundDrawable(background(WALLPAPERS[i]));
+        if (edgeView != null) paintEdge(WALLPAPERS[i]);
+    }
+
+    private void paintEdge(int[] c) {
+        int base = c[2] & 0x00FFFFFF;
+        edgeView.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] {base, 0xB0000000 | base, 0xF2000000 | base}));
     }
 
     // The wallpapers, each with a small dot of its colours. Moving through the list shows each one
@@ -513,7 +669,8 @@ public class MainActivity extends Activity {
     private void applyLayout(int[] l) {
         perRow = l[0]; gap = l[1]; tileShape = l[2]; rowStep = l[3]; row1Top = l[4]; gridMinTop = l[5];
         clockSize = l[6]; dateSize = l[7];
-        clockCentred = l[8] == 1; alwaysNames = l[9] == 1; glassOnly = l[10] == 1;
+        clockCentred = l[8] == 1; alwaysNames = l[9] == 1; noNames = l[9] == 2; glassOnly = l[10] == 1;
+        cinema = l[11] == 1;
     }
 
     // The layouts by name; the clock and grid are placed once, so picking one starts the page over.
@@ -577,7 +734,7 @@ public class MainActivity extends Activity {
         gridTop = Math.max(px(gridMinTop), px(row1Top) - (rows - 1) * px(rowStep));
         int bottomTop = gridTop + rows * px(rowStep);
         ((FrameLayout.LayoutParams) moveHint.getLayoutParams()).topMargin = gridTop - px(64);
-        root.setMinimumHeight(bottomTop + h + px(MARGIN));
+        root.setMinimumHeight(bottomTop + h + px(MARGIN) + (cinema ? px(200) : 0));
 
         for (String pkg : apps) {
             Intent li = launchIntent(pm, pkg);
@@ -676,7 +833,8 @@ public class MainActivity extends Activity {
         card.setTag(key);
 
         // Banner tiles show their name underneath when focused.
-        final TextView caption = banner == null ? null : text(px(24), Color.WHITE, regular);
+        final TextView caption = banner == null || noNames ? null : text(px(24), Color.WHITE, regular);
+        if (cinema) tints.put(key, tint(banner != null ? banner : appIcon));
         if (caption != null) {
             caption.setText(label);
             caption.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -689,6 +847,7 @@ public class MainActivity extends Activity {
             if (has) focusedKey = key;
             lift(v, bg, has, glass ? 0x13FFFFFF : 0xFF1E1A1C, glass ? 0x38FFFFFF : 0xFF1E1A1C,
                     px(RADIUS), px(RADIUS + RADIUS_UP));
+            if (cinema && has) spotlight(key);
             if (caption != null && alwaysNames) {
                 caption.animate().cancel();
                 caption.animate().alpha(has ? 1f : NAME_REST).setDuration(FOCUS_MS).setInterpolator(FOCUS_EASE).start();
@@ -759,7 +918,8 @@ public class MainActivity extends Activity {
     private void lift(View v, GradientDrawable bg, boolean has, int restColor, int focusColor,
                       int restRadius, int focusRadius) {
         v.animate().cancel();
-        v.animate().scaleX(has ? 1.1f : 1f).scaleY(has ? 1.1f : 1f).translationZ(has ? px(26) : 0)
+        float up = cinema ? CINEMA_LIFT : 1.1f;
+        v.animate().scaleX(has ? up : 1f).scaleY(has ? up : 1f).translationZ(has ? px(26) : 0)
                 .setDuration(FOCUS_MS).setInterpolator(FOCUS_EASE).withLayer().start();
         tween(v, bg, has, restColor, focusColor, restRadius, focusRadius);
     }
@@ -798,6 +958,69 @@ public class MainActivity extends Activity {
     private static int channel(int from, int to, int shift, float t) {
         int a = (from >>> shift) & 0xFF, b = (to >>> shift) & 0xFF;
         return Math.round(a + (b - a) * t);
+    }
+
+    // Cinema: the focused app keeps full light and casts a shadow in its own colour, which also lights the
+    // page behind; the other apps step back. Anything else focused (Settings, the icons) dims all apps.
+    private void spotlight(String key) {
+        Integer tint = tints.get(key);
+        int color = tint != null ? tint : 0xFF8C8C9A;
+        for (View t : tiles) {
+            Object tag = t.getTag();
+            if (!rowApps.contains(tag)) continue;
+            boolean lit = tag.equals(key);
+            t.animate().alpha(lit ? 1f : SPOTLIGHT_REST).setDuration(FOCUS_MS * 2).start();
+            if (lit && android.os.Build.VERSION.SDK_INT >= 28) {
+                t.setOutlineSpotShadowColor(color);
+                t.setOutlineAmbientShadowColor(color);
+            }
+        }
+        glow(tint != null ? (color & 0x00FFFFFF) | 0x66000000 : 0x26FFFFFF);
+    }
+
+    // Fades the light behind the page to a new colour.
+    private void glow(final int to) {
+        if (glowView == null || to == glowColor) return;
+        if (glowFade != null) glowFade.cancel();
+        final int from = glowColor;
+        final GradientDrawable g = (GradientDrawable) glowView.getBackground();
+        glowFade = ValueAnimator.ofFloat(0f, 1f);
+        glowFade.setDuration(GLOW_MS);
+        glowFade.setInterpolator(FOCUS_EASE);
+        glowFade.addUpdateListener(an -> {
+            int c = blend(from, to, (float) an.getAnimatedValue());
+            glowColor = c;
+            g.setColors(new int[] {c, c & 0x00FFFFFF});
+        });
+        glowFade.start();
+    }
+
+    // An app's colour from its banner or icon: an average weighted towards saturated pixels, so a white
+    // banner with a red logo (Netflix) gives red, then made bright enough to glow. Grey if there's none.
+    private int tint(Drawable d) {
+        if (d == null) return 0xFF8C8C9A;
+        try {
+            Drawable copy = d.getConstantState() != null ? d.getConstantState().newDrawable().mutate() : d;
+            Bitmap b = Bitmap.createBitmap(32, 18, Bitmap.Config.ARGB_8888);
+            copy.setBounds(0, 0, 32, 18);
+            copy.draw(new Canvas(b));
+            float r = 0, gr = 0, bl = 0, weight = 0;
+            float[] hsv = new float[3];
+            for (int y = 0; y < 18; y++) for (int x = 0; x < 32; x++) {
+                int p = b.getPixel(x, y);
+                if (Color.alpha(p) < 128) continue;
+                Color.colorToHSV(p, hsv);
+                float w = hsv[1] * hsv[1] * hsv[2] + 0.01f;
+                r += Color.red(p) * w; gr += Color.green(p) * w; bl += Color.blue(p) * w; weight += w;
+            }
+            b.recycle();
+            if (weight <= 0) return 0xFF8C8C9A;
+            Color.colorToHSV(Color.rgb(Math.round(r / weight), Math.round(gr / weight), Math.round(bl / weight)), hsv);
+            hsv[2] = Math.max(hsv[2], 0.85f);
+            return Color.HSVToColor(hsv);
+        } catch (Throwable t) {
+            return 0xFF8C8C9A;
+        }
     }
 
     // Names shown under every banner (Cinema) rest dimmed, so the focused one still stands out.

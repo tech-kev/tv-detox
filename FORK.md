@@ -20,6 +20,19 @@ gleich mit dem Original.
 - **Google TV öffnen**: bleibt bis zum nächsten Home bei Google TV.
 - **Home-Taste abfangen: an/aus**: aus = Home verhält sich wieder wie bei Google TV.
 
+**Kino-Layout**
+- Hintergrund leuchtet in der Farbe der markierten App (aus Banner/Icon berechnet, einmal pro App), weich überblendet.
+- Markierte App größer, mit Schatten in ihrer Farbe; die anderen gedimmt. Keine Namen unter den Kacheln.
+- Unterer Rand läuft wie eine Leinwand ins Dunkle aus.
+- „Licht aus“: nach 20 s ohne Taste bleiben nur Begrüßung, Uhr und Witz. Der erste Tastendruck weckt nur.
+- Begrüßung je nach Tageszeit vor dem Datum.
+- Witz des Tages von [JokeAPI](https://v2.jokeapi.dev) (safe mode, Sprache des TVs), einmal pro Tag geladen und
+  gespeichert. Dafür hat die App jetzt die Berechtigung `INTERNET`; andere Layouts gehen nicht ins Netz.
+
+| Prime Video markiert | Licht aus |
+|---|---|
+| ![Kino, Prime Video](docs/screenshots/cinema-prime.png) | ![Kino, Licht aus](docs/screenshots/cinema-lights-off.png) |
+
 **Speicherhinweis**: oben rechts neben dem Netzwerk-Symbol, wenn weniger als 15 % frei sind (orange unter
 10 %). OK öffnet die Speicher-Einstellungen.
 
