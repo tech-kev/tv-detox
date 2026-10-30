@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
     // this long without a key, and the joke is fetched once a day.
     private static final float SPOTLIGHT_REST = 0.5f, CINEMA_LIFT = 1.12f, LIGHTS_DIM = 0.14f;
     private static final int EDGE = 260; // the soft bottom edge's height
-    private static final long LIGHTS_OFF_MS = 20000, LIGHTS_FADE_MS = 1200, GLOW_MS = 450;
+    private static final long LIGHTS_OFF_MS = 60000, LIGHTS_FADE_MS = 1200, GLOW_MS = 450;
     private static final String JOKE_URL = "https://v2.jokeapi.dev/joke/Miscellaneous,Dark,Pun,Spooky,Christmas?lang=";
     private TextClock dateView;
     private TextView jokeView, jokeHead;

@@ -24,7 +24,7 @@ gleich mit dem Original.
 - Hintergrund leuchtet in der Farbe der markierten App (aus Banner/Icon berechnet, einmal pro App), weich überblendet.
 - Markierte App größer, mit Schatten in ihrer Farbe; die anderen gedimmt. Keine Namen unter den Kacheln.
 - Unterer Rand läuft wie eine Leinwand ins Dunkle aus; markierte untere Reihen scrollen darüber hinaus.
-- „Licht aus“: nach 20 s ohne Taste bleiben Begrüßung, Uhr und Witz; die Apps nur noch schwach sichtbar.
+- „Licht aus“: nach 60 s ohne Taste bleiben Begrüßung, Uhr und Witz; die Apps nur noch schwach sichtbar.
   Der erste Tastendruck weckt nur.
 - Begrüßung je nach Tageszeit vor dem Datum.
 - „Witz des Tages“ von [JokeAPI](https://v2.jokeapi.dev) (Kategorien Miscellaneous, Dark, Pun, Spooky, Christmas;
